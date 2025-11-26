@@ -1,0 +1,21 @@
+name: main
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - id: s3
+        uses: ./
+      - name: Show outputs
+        run: |
+          echo "s3_port=${{ steps.s3.outputs.s3_port }}"
+          echo "s3_region=${{ steps.s3.outputs.s3_region }}"
+          echo "s3_bucket=${{ steps.s3.outputs.s3_bucket }}"
+          echo "s3_access_key=${{ steps.s3.outputs.s3_access_key }}"
+          echo "s3_secret_key=${{ steps.s3.outputs.s3_secret_key }}"
