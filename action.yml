@@ -1,0 +1,98 @@
+name: Setup S3
+description: "Connect your GitHub Action workflow to Tailscale"
+branding:
+  icon: file
+  color: orange
+
+inputs:
+  port:
+    description: "Port for S3 API"
+    required: false
+    default: "3900"
+  bucket:
+    description: "S3 Bucket"
+    required: false
+    default: "bucket"
+
+outputs:
+  s3_port:
+    description: S3 Port
+    value: ${{ steps.create.outputs.s3_port }}
+  s3_region:
+    description: S3 Region
+    value: garage
+  s3_bucket:
+    description: S3 Bucket
+    value: ${{ steps.create.outputs.s3_bucket }}
+  s3_access_key:
+    description: S3 Access Key
+    value: ${{ steps.create.outputs.s3_access_key }}
+  s3_secret_key:
+    description: S3 Secret Key
+    value: ${{ steps.create.outputs.s3_secret_key }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create S3 configuration
+      shell: bash
+      run: |
+        mkdir -p .garage/meta
+        mkdir -p .garage/data
+        cp ${{ github.action_path }}/garage.toml .garage/garage.toml
+    - name: Start S3
+      shell: bash
+      run: |
+        docker run -d --name garaged \
+                   -p ${{ inputs.port }}:3900 \
+                   -v ./.garage/garage.toml:/etc/garage.toml \
+                   -v ./.garage/meta:/var/lib/garage/meta \
+                   -v ./.garage/data:/var/lib/garage/data \
+                   dxflrs/garage:v2.1.0
+    - name: Wait for S3 to start
+      shell: bash
+      run: |
+        sleep 5
+        RETRY=120
+        until $GARAGE_BIN status 2>&1|grep -q HEALTHY ; do
+          (( RETRY-- ))
+          if (( RETRY <= 0 )); then
+            echo "garage did not start in time, failing."
+            exit 1
+          fi
+          echo "cluster starting..."
+          sleep 1
+        done
+      env:
+        GARAGE_BIN: docker exec garaged /garage
+    - name: Initialize S3
+      shell: bash
+      run: |
+        $GARAGE_BIN --version
+        $GARAGE_BIN status \
+          | grep 'NO ROLE' \
+          | grep -Po '^[0-9a-f]+' \
+          | while read id; do
+            $GARAGE_BIN layout assign $id -z dc1 -c 0.1G
+          done
+        $GARAGE_BIN layout apply --version 1
+      env:
+        GARAGE_BIN: docker exec garaged /garage
+    - name: Create bucket and key
+      id: create
+      shell: bash
+      run: |
+        $GARAGE_BIN bucket create ${{ inputs.bucket }}
+        $GARAGE_BIN bucket list
+        $GARAGE_BIN bucket info ${{ inputs.bucket }}
+        KEY_INFO=$($GARAGE_BIN key create $GARAGE_KEY)
+        ACCESS_KEY=`echo $KEY_INFO|grep -Po 'GK[a-f0-9]+'`
+        SECRET_KEY=`echo $KEY_INFO|grep -Po 'Secret key: [a-f0-9]+'|grep -Po '[a-f0-9]+$'`
+        $GARAGE_BIN bucket allow ${{ inputs.bucket }} --read --write --owner --key $ACCESS_KEY
+        echo "s3_port=${{ inputs.port }}" >> $GITHUB_OUTPUT
+        echo "s3_bucket=${{ inputs.bucket }}" >> $GITHUB_OUTPUT
+        echo "s3_access_key=$ACCESS_KEY" >> $GITHUB_OUTPUT
+        echo "s3_secret_key=$SECRET_KEY" >> $GITHUB_OUTPUT
+      env:
+        GARAGE_BIN: docker exec garaged /garage
+        GARAGE_KEY: ${{ inputs.bucket }}-key
